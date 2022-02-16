@@ -6,28 +6,38 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
-#[macro_use]
-extern crate failure;
-
 pub extern crate derivation_path;
 pub extern crate ed25519_dalek;
 
 pub use derivation_path::{ChildIndex, DerivationPath};
 pub use ed25519_dalek::{PublicKey, SecretKey};
 
-use hmac::{Hmac, Mac, NewMac};
+use core::fmt;
+use hmac::{Hmac, Mac};
 use sha2::Sha512;
 
 const ED25519_BIP32_NAME: &str = "ed25519 seed";
 
 /// Errors thrown while deriving secret keys
-#[derive(Debug, Fail)]
+#[derive(Debug)]
 pub enum Error {
-    #[fail(display = "ed25519 error")]
     Ed25519,
-    #[fail(display = "expected hardened child index: {}", _0)]
     ExpectedHardenedIndex(ChildIndex),
 }
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ed25519 => f.write_str("ed25519 error"),
+            Self::ExpectedHardenedIndex(index) => {
+                f.write_fmt(format_args!("expected hardened child index: {}", index))
+            }
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl std::error::Error for Error {}
 
 /// An expanded secret key with chain code and meta data
 #[derive(Debug)]
@@ -50,7 +60,7 @@ pub type Result<T, E = Error> = core::result::Result<T, E>;
 impl ExtendedSecretKey {
     /// Create a new extended secret key from a seed
     pub fn from_seed(seed: &[u8]) -> Result<Self> {
-        let mut mac = HmacSha512::new_varkey(ED25519_BIP32_NAME.as_ref()).unwrap();
+        let mut mac = HmacSha512::new_from_slice(ED25519_BIP32_NAME.as_ref()).unwrap();
         mac.update(seed);
         let bytes = mac.finalize().into_bytes();
 
@@ -68,7 +78,7 @@ impl ExtendedSecretKey {
 
     /// Derive an extended secret key fom the current using a derivation path
     pub fn derive<P: AsRef<[ChildIndex]>>(&self, path: &P) -> Result<Self> {
-        let mut path = path.as_ref().into_iter();
+        let mut path = path.as_ref().iter();
         let mut next = match path.next() {
             Some(index) => self.derive_child(*index)?,
             None => self.clone(),
@@ -85,7 +95,7 @@ impl ExtendedSecretKey {
             return Err(Error::ExpectedHardenedIndex(index));
         }
 
-        let mut mac = HmacSha512::new_varkey(&self.chain_code).unwrap();
+        let mut mac = HmacSha512::new_from_slice(&self.chain_code).unwrap();
         mac.update(&[0u8]);
         mac.update(self.secret_key.to_bytes().as_ref());
         mac.update(index.to_bits().to_be_bytes().as_ref());
